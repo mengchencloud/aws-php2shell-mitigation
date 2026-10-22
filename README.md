@@ -2,8 +2,24 @@
 
 [中文](#中文) | [English](#english)
 
-> 本项目不是 AWS 官方产品，内容以 AWS 安全公告和 PHP 官方为准。
-> This is not an official AWS project. AWS security bulletins and php.net are authoritative.
+> **免责声明**
+> - 本项目不是 AWS 官方项目，也不代表 AWS 的立场。内容只是对下方「参考资料」中 AWS 官方公告、AWS 安全博客和 PHP 官方发布信息的引用和整理，WAF 规则逻辑照搬自官方公告，没有任何新增的检测方法。
+> - 内容以官方原文为准。官方信息会持续更新，本仓库可能滞后，使用前请对照原文确认最新版本和建议。
+> - 打补丁升级 PHP 是唯一的完整修复。WAF 规则和配置调整只能降低已知攻击路径的风险，不能保证完全防住。
+> - 模板和命令按「原样」提供，不做任何担保。部署前请在测试环境验证，自行评估误报和对业务的影响，部署和使用的后果由使用者自行承担。
+>
+> **Disclaimer**
+> - This is not an official AWS project and does not represent AWS. It only quotes and organizes the official AWS security bulletin, AWS Security Blog posts and PHP release information listed under References. The WAF rule logic is copied from the official bulletin; no new detection logic is introduced.
+> - The official sources are authoritative. They are updated over time and this repository may lag behind; always check the originals for the latest versions and guidance.
+> - Patching PHP is the only complete fix. WAF rules and configuration changes only reduce exposure to known attack paths and do not guarantee protection.
+> - Templates and commands are provided "as is", without warranty of any kind. Test in a non-production environment, assess false positives and business impact yourself, and use at your own risk.
+
+**参考资料 / References**
+- AWS Security Bulletin [2026-143-AWS](https://aws.amazon.com/security/security-bulletins/rss/2026-143-aws/)：受影响的 AWS 服务、AWS 推荐的 WAF 规则 / AWS service status and the recommended AWS WAF rule
+- AWS Security Blog：[Using AWS WAF to apply mitigations for PHP2Shell RCE vulnerabilities (CVE-2026-109618 and CVE-2026-109619)](https://aws.amazon.com/blogs/security/using-aws-waf-to-apply-mitigations-for-php2shell-rce-vulnerabilities-cve-2026-109618-and-cve-2026-109619/)
+- AWS Security Blog：[Amazon Threat Intelligence identifies PHP2Shell exploitation prior to public disclosure in MadPot](https://aws.amazon.com/blogs/security/amazon-threat-intelligence-identifies-php2shell-exploitation-prior-to-public-disclosure-in-madpot/)
+- Amazon Linux Security Center：[CVE-2026-109618](https://explore.alas.aws.amazon.com/CVE-2026-109618.html)（ALAS2023-2026-3301 ~ 3304、ALAS2PHP8.2-2026-015）
+- PHP 官方 / PHP project：[php.net](https://www.php.net/)（8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 发布公告 / release announcement）
 
 ---
 
@@ -23,7 +39,7 @@
 | 8.1 及更老 | 没有正式修复，只能迁移到受支持版本 |
 
 ### 2. 临时防护：AWS WAF（本仓库模板 `php2shell-waf.yaml`）
-WAF 只是打补丁前的纵深防护，官方明确说 WAF 和配置调整都不能完全防住。PHP 配置层面还可以设 `session.upload_progress.enabled=0`；8.5 版本再加 `fatal_error_backtraces=0`，然后重启 worker。
+WAF 只是打补丁前的纵深防护，官方明确说 WAF 和配置调整都不能完全防住。规则逻辑、部署思路和防护边界请以 [AWS 公告 2026-143-AWS](https://aws.amazon.com/security/security-bulletins/rss/2026-143-aws/) 和 [AWS 安全博客的 WAF 方案](https://aws.amazon.com/blogs/security/using-aws-waf-to-apply-mitigations-for-php2shell-rce-vulnerabilities-cve-2026-109618-and-cve-2026-109619/) 为准，本模板只是把其中的规则整理成 CloudFormation，方便部署。PHP 配置层面还可以设 `session.upload_progress.enabled=0`；8.5 版本再加 `fatal_error_backtraces=0`，然后重启 worker。
 
 | 资源 | 什么时候建 | 作用 |
 |---|---|---|
@@ -153,7 +169,7 @@ sudo systemctl restart php8.3-fpm apache2
 | 8.1 and older | No official fix - migrate to a supported branch |
 
 ### 2. Temporary mitigation - AWS WAF (`php2shell-waf.yaml`)
-WAF is defense in depth until you patch; AWS states that neither WAF nor config changes fully prevent exploitation. On the PHP side you can also set `session.upload_progress.enabled=0` (and `fatal_error_backtraces=0` on 8.5), then restart workers.
+WAF is defense in depth until you patch; AWS states that neither WAF nor config changes fully prevent exploitation. The [AWS bulletin 2026-143-AWS](https://aws.amazon.com/security/security-bulletins/rss/2026-143-aws/) and the [AWS Security Blog WAF post](https://aws.amazon.com/blogs/security/using-aws-waf-to-apply-mitigations-for-php2shell-rce-vulnerabilities-cve-2026-109618-and-cve-2026-109619/) are authoritative for rule logic, rollout and protection limits; this template only packages those rules as CloudFormation for easier deployment. On the PHP side you can also set `session.upload_progress.enabled=0` (and `fatal_error_backtraces=0` on 8.5), then restart workers.
 
 | Resource | When | Purpose |
 |---|---|---|
