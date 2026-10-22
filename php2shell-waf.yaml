@@ -10,14 +10,13 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label: { default: Rule group (always created) }
-        Parameters: [NamePrefix, Php2ShellRuleAction, BodySizeRuleAction]
+        Parameters: [NamePrefix, RuleAction, IncludeBodySizeRule]
       - Label: { default: New Web ACL (optional - only if you have no WAF yet) }
         Parameters:
           - CreateWebACL
           - IncludePHPManagedRuleGroup
           - PHPManagedRuleGroupVersion
           - IncludeCoreRuleSet
-          - CoreRuleSetMode
           - AssociateResourceArn
 
 Parameters:
@@ -27,23 +26,25 @@ Parameters:
     AllowedPattern: '^[A-Za-z0-9\-_]{1,64}$'
     Description: Prefix for rule group / Web ACL names and CloudWatch metric names.
 
-  Php2ShellRuleAction:
-    Type: String
-    Default: Block
-    AllowedValues: [Block, Count]
-    Description: >-
-      Action of the CVE-2026-109619 rule (POST + PHP_SESSION_UPLOAD_PROGRESS +
-      PHPSESSID). The AWS bulletin uses Block; false positives are rare.
-
-  BodySizeRuleAction:
+  RuleAction:
     Type: String
     Default: Count
-    AllowedValues: [Disabled, Count, Block]
+    AllowedValues: [Count, Block]
     Description: >-
-      Action of the "request body > 8 KB" rule (CVE-2026-109618, same logic as
-      CRS SizeRestrictions_BODY). Also closes the 8 KB inspection gap of the rule
-      above. Will hit legitimate file uploads - start with Count. Set Disabled if
-      you already run CRS SizeRestrictions_BODY.
+      One switch for every rule this template deploys. Count (default) = only
+      count matching requests, nothing is blocked - check CloudWatch metrics and
+      sampled requests first. Block = custom rules block, and the PHP / Core
+      managed rule groups use their own rule actions (mostly Block).
+
+  IncludeBodySizeRule:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Add the "request body > 8 KB" rule (CVE-2026-109618, same logic as CRS
+      SizeRestrictions_BODY). Also closes the 8 KB inspection gap of the
+      PHP2Shell rule. Will hit legitimate file uploads in Block mode. Set false
+      if you already run CRS SizeRestrictions_BODY.
 
   CreateWebACL:
     Type: String
@@ -73,14 +74,6 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: Add AWSManagedRulesCommonRuleSet (700 WCU) to the new Web ACL.
 
-  CoreRuleSetMode:
-    Type: String
-    Default: Count
-    AllowedValues: [Count, Enforce]
-    Description: >-
-      Count = whole CRS in count mode (safe first rollout); Enforce = use the
-      rules' own actions (mostly Block).
-
   AssociateResourceArn:
     Type: String
     Default: ''
@@ -91,9 +84,8 @@ Parameters:
       supported by this REGIONAL template.
 
 Conditions:
-  Php2ShellBlock: !Equals [!Ref Php2ShellRuleAction, Block]
-  BodySizeEnabled: !Not [!Equals [!Ref BodySizeRuleAction, Disabled]]
-  BodySizeBlock: !Equals [!Ref BodySizeRuleAction, Block]
+  IsBlock: !Equals [!Ref RuleAction, Block]
+  BodySizeEnabled: !Equals [!Ref IncludeBodySizeRule, 'true']
   CreateAcl: !Equals [!Ref CreateWebACL, 'true']
   AddPhpGroup: !And
     - !Condition CreateAcl
@@ -101,7 +93,6 @@ Conditions:
   AddCrs: !And
     - !Condition CreateAcl
     - !Equals [!Ref IncludeCoreRuleSet, 'true']
-  CrsCount: !Equals [!Ref CoreRuleSetMode, Count]
   DoAssociate: !And
     - !Condition CreateAcl
     - !Not [!Equals [!Ref AssociateResourceArn, '']]
@@ -127,7 +118,7 @@ Resources:
         - Name: PHP2Shell
           Priority: 0
           Action: !If
-            - Php2ShellBlock
+            - IsBlock
             - Block: {}
             - Count: {}
           VisibilityConfig:
@@ -183,7 +174,7 @@ Resources:
           - Name: BodySizeOver8KB
             Priority: 1
             Action: !If
-              - BodySizeBlock
+              - IsBlock
               - Block: {}
               - Count: {}
             VisibilityConfig:
@@ -234,8 +225,11 @@ Resources:
           - AddPhpGroup
           - Name: AWS-AWSManagedRulesPHPRuleSet
             Priority: 1
-            OverrideAction:
-              None: {}
+            # Count = override the whole group to count; Block = rules' own actions
+            OverrideAction: !If
+              - IsBlock
+              - None: {}
+              - Count: {}
             VisibilityConfig:
               SampledRequestsEnabled: true
               CloudWatchMetricsEnabled: true
@@ -251,9 +245,9 @@ Resources:
           - Name: AWS-AWSManagedRulesCommonRuleSet
             Priority: 2
             OverrideAction: !If
-              - CrsCount
-              - Count: {}
+              - IsBlock
               - None: {}
+              - Count: {}
             VisibilityConfig:
               SampledRequestsEnabled: true
               CloudWatchMetricsEnabled: true
