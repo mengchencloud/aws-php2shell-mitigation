@@ -117,7 +117,7 @@ Resources:
       Scope: REGIONAL
       # Rules use ~26 WCU; capacity is immutable, so keep headroom.
       Capacity: 50
-      Description: PHP2Shell mitigation (AWS security bulletin 2026-143-AWS)
+      Description: PHP2Shell mitigation - AWS security bulletin 2026-143-AWS
       VisibilityConfig:
         SampledRequestsEnabled: true
         CloudWatchMetricsEnabled: true
