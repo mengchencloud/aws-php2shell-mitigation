@@ -1,0 +1,281 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  PHP2Shell (CVE-2026-109618 / CVE-2026-109619) temporary mitigation with AWS WAF
+  (REGIONAL). Always creates a custom rule group based on AWS security bulletin
+  2026-143-AWS. Optionally creates a new Web ACL (for accounts with no WAF yet),
+  adds the PHP / Core managed rule groups, and associates it with an ALB or
+  API Gateway stage. Patching PHP is the real fix; this is defense in depth.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Rule group (always created) }
+        Parameters: [NamePrefix, Php2ShellRuleAction, BodySizeRuleAction]
+      - Label: { default: New Web ACL (optional - only if you have no WAF yet) }
+        Parameters:
+          - CreateWebACL
+          - IncludePHPManagedRuleGroup
+          - PHPManagedRuleGroupVersion
+          - IncludeCoreRuleSet
+          - CoreRuleSetMode
+          - AssociateResourceArn
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: php2shell
+    AllowedPattern: '^[A-Za-z0-9\-_]{1,64}$'
+    Description: Prefix for rule group / Web ACL names and CloudWatch metric names.
+
+  Php2ShellRuleAction:
+    Type: String
+    Default: Block
+    AllowedValues: [Block, Count]
+    Description: >-
+      Action of the CVE-2026-109619 rule (POST + PHP_SESSION_UPLOAD_PROGRESS +
+      PHPSESSID). The AWS bulletin uses Block; false positives are rare.
+
+  BodySizeRuleAction:
+    Type: String
+    Default: Count
+    AllowedValues: [Disabled, Count, Block]
+    Description: >-
+      Action of the "request body > 8 KB" rule (CVE-2026-109618, same logic as
+      CRS SizeRestrictions_BODY). Also closes the 8 KB inspection gap of the rule
+      above. Will hit legitimate file uploads - start with Count. Set Disabled if
+      you already run CRS SizeRestrictions_BODY.
+
+  CreateWebACL:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      true = create a new Web ACL containing the rule group. Use only when the
+      target resource has NO Web ACL. If a Web ACL already exists, keep false and
+      reference the RuleGroupArn output from your existing Web ACL.
+
+  IncludePHPManagedRuleGroup:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Add AWSManagedRulesPHPRuleSet (100 WCU) to the new Web ACL.
+
+  PHPManagedRuleGroupVersion:
+    Type: String
+    Default: Version_2.3
+    Description: >-
+      Version_2.3 adds the PHP2Shell_BODY rule. The default version may still be
+      2.2, so pin it explicitly.
+
+  IncludeCoreRuleSet:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Add AWSManagedRulesCommonRuleSet (700 WCU) to the new Web ACL.
+
+  CoreRuleSetMode:
+    Type: String
+    Default: Count
+    AllowedValues: [Count, Enforce]
+    Description: >-
+      Count = whole CRS in count mode (safe first rollout); Enforce = use the
+      rules' own actions (mostly Block).
+
+  AssociateResourceArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional. ARN of an ALB or API Gateway REST API stage to associate with the
+      new Web ACL (only used when CreateWebACL=true). The resource must not
+      already have a Web ACL, otherwise it will be replaced. CloudFront is not
+      supported by this REGIONAL template.
+
+Conditions:
+  Php2ShellBlock: !Equals [!Ref Php2ShellRuleAction, Block]
+  BodySizeEnabled: !Not [!Equals [!Ref BodySizeRuleAction, Disabled]]
+  BodySizeBlock: !Equals [!Ref BodySizeRuleAction, Block]
+  CreateAcl: !Equals [!Ref CreateWebACL, 'true']
+  AddPhpGroup: !And
+    - !Condition CreateAcl
+    - !Equals [!Ref IncludePHPManagedRuleGroup, 'true']
+  AddCrs: !And
+    - !Condition CreateAcl
+    - !Equals [!Ref IncludeCoreRuleSet, 'true']
+  CrsCount: !Equals [!Ref CoreRuleSetMode, Count]
+  DoAssociate: !And
+    - !Condition CreateAcl
+    - !Not [!Equals [!Ref AssociateResourceArn, '']]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Custom rule group (always created)
+  # ---------------------------------------------------------------------------
+  Php2ShellRuleGroup:
+    Type: AWS::WAFv2::RuleGroup
+    Properties:
+      Name: !Sub '${NamePrefix}-rulegroup'
+      Scope: REGIONAL
+      # Rules use ~26 WCU; capacity is immutable, so keep headroom.
+      Capacity: 50
+      Description: PHP2Shell mitigation (AWS security bulletin 2026-143-AWS)
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub '${NamePrefix}-rulegroup'
+      Rules:
+        # CVE-2026-109619 - rule copied from the AWS bulletin
+        - Name: PHP2Shell
+          Priority: 0
+          Action: !If
+            - Php2ShellBlock
+            - Block: {}
+            - Count: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub '${NamePrefix}-PHP2Shell'
+          Statement:
+            AndStatement:
+              Statements:
+                - ByteMatchStatement:
+                    SearchString: POST
+                    FieldToMatch:
+                      Method: {}
+                    TextTransformations:
+                      - Priority: 0
+                        Type: NONE
+                    PositionalConstraint: EXACTLY
+                - OrStatement:
+                    Statements:
+                      - ByteMatchStatement:
+                          SearchString: PHPSESSID
+                          FieldToMatch:
+                            Cookies:
+                              MatchPattern:
+                                All: {}
+                              MatchScope: KEY
+                              OversizeHandling: CONTINUE
+                          TextTransformations:
+                            - Priority: 0
+                              Type: NONE
+                          PositionalConstraint: EXACTLY
+                      - ByteMatchStatement:
+                          SearchString: PHPSESSID
+                          FieldToMatch:
+                            Body:
+                              OversizeHandling: CONTINUE
+                          TextTransformations:
+                            - Priority: 0
+                              Type: NONE
+                          PositionalConstraint: CONTAINS
+                - ByteMatchStatement:
+                    SearchString: PHP_SESSION_UPLOAD_PROGRESS
+                    FieldToMatch:
+                      Body:
+                        OversizeHandling: CONTINUE
+                    TextTransformations:
+                      - Priority: 0
+                        Type: NONE
+                    PositionalConstraint: CONTAINS
+        # CVE-2026-109618 - body larger than 8 KB (same as CRS SizeRestrictions_BODY)
+        - !If
+          - BodySizeEnabled
+          - Name: BodySizeOver8KB
+            Priority: 1
+            Action: !If
+              - BodySizeBlock
+              - Block: {}
+              - Count: {}
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: !Sub '${NamePrefix}-BodySizeOver8KB'
+            Statement:
+              SizeConstraintStatement:
+                FieldToMatch:
+                  Body:
+                    OversizeHandling: MATCH
+                ComparisonOperator: GT
+                Size: 8192
+                TextTransformations:
+                  - Priority: 0
+                    Type: NONE
+          - !Ref AWS::NoValue
+
+  # ---------------------------------------------------------------------------
+  # Optional new Web ACL (for accounts / resources without WAF)
+  # ---------------------------------------------------------------------------
+  Php2ShellWebACL:
+    Type: AWS::WAFv2::WebACL
+    Condition: CreateAcl
+    Properties:
+      Name: !Sub '${NamePrefix}-webacl'
+      Scope: REGIONAL
+      Description: PHP2Shell mitigation Web ACL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub '${NamePrefix}-webacl'
+      Rules:
+        - Name: php2shell-rulegroup
+          Priority: 0
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub '${NamePrefix}-ref-rulegroup'
+          Statement:
+            RuleGroupReferenceStatement:
+              Arn: !GetAtt Php2ShellRuleGroup.Arn
+        - !If
+          - AddPhpGroup
+          - Name: AWS-AWSManagedRulesPHPRuleSet
+            Priority: 1
+            OverrideAction:
+              None: {}
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: !Sub '${NamePrefix}-PHPRuleSet'
+            Statement:
+              ManagedRuleGroupStatement:
+                VendorName: AWS
+                Name: AWSManagedRulesPHPRuleSet
+                Version: !Ref PHPManagedRuleGroupVersion
+          - !Ref AWS::NoValue
+        - !If
+          - AddCrs
+          - Name: AWS-AWSManagedRulesCommonRuleSet
+            Priority: 2
+            OverrideAction: !If
+              - CrsCount
+              - Count: {}
+              - None: {}
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: !Sub '${NamePrefix}-CommonRuleSet'
+            Statement:
+              ManagedRuleGroupStatement:
+                VendorName: AWS
+                Name: AWSManagedRulesCommonRuleSet
+          - !Ref AWS::NoValue
+
+  Php2ShellWebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Condition: DoAssociate
+    Properties:
+      ResourceArn: !Ref AssociateResourceArn
+      WebACLArn: !GetAtt Php2ShellWebACL.Arn
+
+Outputs:
+  RuleGroupArn:
+    Description: Reference this in an existing Web ACL (RuleGroupReferenceStatement)
+    Value: !GetAtt Php2ShellRuleGroup.Arn
+  WebACLArn:
+    Condition: CreateAcl
+    Description: New Web ACL ARN
+    Value: !GetAtt Php2ShellWebACL.Arn
