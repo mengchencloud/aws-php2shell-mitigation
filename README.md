@@ -43,7 +43,7 @@ WAF 只是打补丁前的纵深防护，官方明确说 WAF 和配置调整都�
 
 | 资源 | 什么时候建 | 作用 |
 |---|---|---|
-| 自定义 Rule Group（REGIONAL，50 WCU） | 总是建 | `PHP2Shell` 规则（防 109619，逻辑照搬 AWS 公告）：POST 请求，请求体里有 `PHP_SESSION_UPLOAD_PROGRESS`，并且 cookie 名或请求体里有 `PHPSESSID`。`BodySizeOver8KB` 规则（防 109618）：请求体超过 8KB，逻辑同 CRS 的 `SizeRestrictions_BODY` |
+| 自定义 Rule Group（REGIONAL，50 WCU） | 总是建 | `PHP2Shell` 规则（防 109619，逻辑照搬 AWS 公告）：POST 请求，请求体里有 `PHP_SESSION_UPLOAD_PROGRESS`，并且 cookie 名或请求体里有 `PHPSESSID`。`BodySizeOver8KB` 规则（防 109618）：请求体超过 8KB，逻辑同 CRS 的 `SizeRestrictions_BODY`。可选（默认不加，来自 AWS WAF 博客）：`MultipartFormData`（Content-Type 含 `multipart/form-data`，两个漏洞的共同入口）、`PostRateLimit`（每个 IP 在时间窗口内的 POST 数超限）。四条规则全开共 49 WCU |
 | 新 Web ACL | `CreateWebACL=true` | 引用上面的 Rule Group，可选加 `AWSManagedRulesPHPRuleSet`（固定 `Version_2.3`，带 `PHP2Shell_BODY`）和 `AWSManagedRulesCommonRuleSet` |
 | Web ACL 关联 | `CreateWebACL=true` 且填了 `AssociateResourceArn` | 把新 Web ACL 挂到 ALB 或 API Gateway stage |
 
@@ -66,7 +66,10 @@ aws cloudformation deploy --region cn-north-1 \
   --stack-name php2shell-waf --template-file php2shell-waf.yaml \
   --parameter-overrides CreateWebACL=true AssociateResourceArn=<ALB ARN>
 
-# 查看输出（RuleGroupArn / WebACLArn）
+# 应用没有文件上传：再加上博客的 multipart 规则和 POST 限速规则
+aws cloudformation deploy --region cn-northwest-1 \
+  --stack-name php2shell-waf --template-file php2shell-waf.yaml \
+  --parameter-overrides CreateWebACL=true IncludeMultipartRule=true IncludePostRateLimitRule=true PostRateLimit=100
 aws cloudformation describe-stacks --region cn-northwest-1 \
   --stack-name php2shell-waf --query "Stacks[0].Outputs"
 
@@ -82,6 +85,10 @@ PowerShell 下把行尾的 `\` 换成反引号 `` ` ``，或者把命令写成�
 | `NamePrefix` | `php2shell` | 资源名和指标名前缀 |
 | `RuleAction` | `Count` | 所有规则的统一开关。`Count`：只计数不拦截，先在 CloudWatch 指标和采样请求里确认没有误报；`Block`：自定义规则直接拦截，PHP 托管规则组和 CRS 按规则自身的动作执行（基本是 Block） |
 | `IncludeBodySizeRule` | `true` | 是否加 8KB 规则（防 109618）。Block 模式下会误伤超过 8KB 的文件上传。已经开了 CRS `SizeRestrictions_BODY` 的，设成 `false` |
+| `IncludeMultipartRule` | `false` | 是否加 multipart 规则（来自 AWS WAF 博客）。博客说应用**没有文件上传**时这条最有效，能把两个漏洞的 multipart 入口都堵住；有上传功能的不要开，Block 模式下所有上传都会被拦 |
+| `IncludePostRateLimitRule` | `false` | 是否加 POST 限速规则（来自 AWS WAF 博客），按来源 IP 统计，减少对同一个 worker 的反复尝试。建议配合 PHP-FPM 的 `pm.max_requests=1` |
+| `PostRateLimit` | `100` | 每个 IP 在时间窗口内允许的 POST 数，最小 10。NAT 或代理后面很多用户共用一个出口 IP 的，要调高 |
+| `PostRateLimitWindowSec` | `60` | 限速统计窗口，可选 60/120/300/600 秒 |
 | `CreateWebACL` | `false` | 是否新建 Web ACL |
 | `IncludePHPManagedRuleGroup` | `true` | 新 Web ACL 里加 PHP 托管规则组（100 WCU） |
 | `PHPManagedRuleGroupVersion` | `Version_2.3` | 默认版本可能还是 2.2（没有 `PHP2Shell_BODY`），所以要显式指定 |
@@ -173,7 +180,7 @@ WAF is defense in depth until you patch; AWS states that neither WAF nor config 
 
 | Resource | When | Purpose |
 |---|---|---|
-| Custom rule group (REGIONAL, 50 WCU) | Always | `PHP2Shell` (109619, logic from the AWS bulletin): POST with `PHP_SESSION_UPLOAD_PROGRESS` in the body AND `PHPSESSID` as a cookie name or in the body. `BodySizeOver8KB` (109618): body larger than 8 KB, same as CRS `SizeRestrictions_BODY` |
+| Custom rule group (REGIONAL, 50 WCU) | Always | `PHP2Shell` (109619, logic from the AWS bulletin): POST with `PHP_SESSION_UPLOAD_PROGRESS` in the body AND `PHPSESSID` as a cookie name or in the body. `BodySizeOver8KB` (109618): body larger than 8 KB, same as CRS `SizeRestrictions_BODY`. Optional (off by default, from the AWS WAF blog): `MultipartFormData` (Content-Type contains `multipart/form-data`, the entry point of both CVEs) and `PostRateLimit` (per-IP POST count over the limit). All four rules together use 49 WCU |
 | New Web ACL | `CreateWebACL=true` | References the rule group, optionally adds `AWSManagedRulesPHPRuleSet` (pinned to `Version_2.3`, includes `PHP2Shell_BODY`) and `AWSManagedRulesCommonRuleSet` |
 | Web ACL association | `CreateWebACL=true` and `AssociateResourceArn` set | Attaches the new Web ACL to an ALB or API Gateway stage |
 
@@ -195,6 +202,11 @@ aws cloudformation deploy --region cn-north-1 \
   --stack-name php2shell-waf --template-file php2shell-waf.yaml \
   --parameter-overrides CreateWebACL=true AssociateResourceArn=<ALB ARN>
 
+# App has no file uploads: also add the blog's multipart and POST rate-limit rules
+aws cloudformation deploy --region cn-northwest-1 \
+  --stack-name php2shell-waf --template-file php2shell-waf.yaml \
+  --parameter-overrides CreateWebACL=true IncludeMultipartRule=true IncludePostRateLimitRule=true PostRateLimit=100
+
 aws cloudformation describe-stacks --region cn-northwest-1 \
   --stack-name php2shell-waf --query "Stacks[0].Outputs"
 
@@ -210,6 +222,10 @@ In PowerShell replace the trailing `\` with a backtick or put each command on on
 | `NamePrefix` | `php2shell` | Prefix for resource and metric names |
 | `RuleAction` | `Count` | One switch for all rules. `Count`: count only, nothing blocked - check CloudWatch metrics and sampled requests first. `Block`: custom rules block; the PHP managed group and CRS use their own rule actions (mostly Block) |
 | `IncludeBodySizeRule` | `true` | Add the 8 KB rule (109618). In Block mode it hits uploads larger than 8 KB. Set `false` if CRS `SizeRestrictions_BODY` is already on |
+| `IncludeMultipartRule` | `false` | Add the multipart rule from the AWS WAF blog. Most effective when the application has **no file uploads** - it closes the multipart entry point of both CVEs. Do not enable it for apps with uploads: in Block mode every upload is blocked |
+| `IncludePostRateLimitRule` | `false` | Add the per-IP POST rate-based rule from the AWS WAF blog to reduce repeated attempts against the same worker. Pair it with PHP-FPM `pm.max_requests=1` |
+| `PostRateLimit` | `100` | Max POST requests per IP within the window (minimum 10). Raise it when many users share one NAT/proxy egress IP |
+| `PostRateLimitWindowSec` | `60` | Evaluation window: 60/120/300/600 seconds |
 | `CreateWebACL` | `false` | Create a new Web ACL |
 | `IncludePHPManagedRuleGroup` | `true` | Add the PHP managed rule group (100 WCU) |
 | `PHPManagedRuleGroupVersion` | `Version_2.3` | The default may still be 2.2 (no `PHP2Shell_BODY`), so pin it |
