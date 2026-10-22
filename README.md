@@ -138,16 +138,12 @@ Ubuntu 是把补丁回移到原版本上，`php -v` 仍显示 8.3.6，要看包�
 
 **Elastic Beanstalk**：PHP 平台 v4.13.12 已修复这两个漏洞。开了托管平台更新的环境会在维护窗口自动升级；没开的，在控制台或用 `aws elasticbeanstalk update-environment --solution-stack-name ...` 手动更新到最新 PHP 平台版本。
 
-**Lightsail**（LAMP、WordPress 等蓝图）：已经在跑的实例没法原地更新，只能用新蓝图建实例，再把应用迁过去。
-
 **ECS / EKS / 自建容器镜像**：把基础镜像换成修复版本（例如官方 `php:8.3.36-fpm` 之类的 tag），重新构建、推送，再滚动更新服务。可以用 Inspector 的 ECR 扫描确认没有旧镜像还在用。
 
 **Lambda**：Lambda 没有托管的 PHP 运行时。PHP 一般跑在自定义运行时（`provided.al2` 或 `provided.al2023` 加 Bref 之类的 layer）或者容器镜像里：
 - 用 layer 的：升级到 PHP 版本已修复的 layer，重新部署函数，并确认函数配置引用的是新 layer 版本的 ARN。
 - 用容器镜像的：换成修复版本的基础镜像，重新构建，再执行 `aws lambda update-function-code --image-uri ...`。
 - 查哪些函数用了自定义运行时：`aws lambda list-functions --query "Functions[?starts_with(Runtime||'', 'provided')].[FunctionName,Runtime]"`。容器镜像函数的 Runtime 是空的，要看 `PackageType=Image`。
-
-**Amazon WorkMail**：由 AWS 处理，无需任何操作。
 
 ### 4. 怎么查受影响范围
 - **Amazon Inspector**：漏洞库更新后，会自动标出 EC2、ECR、Lambda 上没修复的 PHP。在规则覆盖到你的操作系统之前，搜 CVE 返回 0 条，不代表没受影响。
@@ -280,16 +276,12 @@ Ubuntu backports the fix, so `php -v` still shows 8.3.6; check the package versi
 
 **Elastic Beanstalk**: PHP platform v4.13.12 fixes both CVEs. Environments with managed platform updates upgrade in their maintenance window; otherwise update the platform version in the console or with `aws elasticbeanstalk update-environment --solution-stack-name ...`.
 
-**Lightsail** (LAMP / WordPress blueprints): running instances cannot be updated in place - create a new instance from the latest blueprint and migrate.
-
 **ECS / EKS / custom container images**: move to a fixed base image (e.g. `php:8.3.36-fpm`), rebuild, push and roll the service. Use Inspector ECR scanning to find images still in use with old PHP.
 
 **Lambda**: Lambda has no managed PHP runtime; PHP runs on a custom runtime (`provided.al2` / `provided.al2023` with a layer such as Bref) or a container image.
 - Layer-based: upgrade to a layer version that ships a fixed PHP, redeploy, and confirm the function references the new layer version ARN.
 - Container image: rebuild on a fixed base image and run `aws lambda update-function-code --image-uri ...`.
 - Find custom-runtime functions: `aws lambda list-functions --query "Functions[?starts_with(Runtime||'', 'provided')].[FunctionName,Runtime]"`; image functions have `PackageType=Image` and no Runtime.
-
-**Amazon WorkMail**: handled by AWS, no action needed.
 
 ### 4. Finding affected resources
 - **Amazon Inspector** flags unpatched PHP on EC2, ECR and Lambda once its vulnerability database covers your OS. Zero findings before coverage lands does not mean you are safe.
