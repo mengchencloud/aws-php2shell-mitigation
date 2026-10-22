@@ -112,19 +112,26 @@ PowerShell 下把行尾的 `\` 换成反引号 `` ` ``，或者把命令写成�
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `NamePrefix` | `php2shell` | 资源名和指标名前缀 |
-| `Php2ShellRuleAction` | `Block` | 109619 规则的动作，公告用的是 Block |
-| `BodySizeRuleAction` | `Count` | 8KB 规则的动作（`Disabled`/`Count`/`Block`）。会误伤文件上传，建议先 Count 观察。已经开了 CRS `SizeRestrictions_BODY` 的，设成 `Disabled` |
+| `RuleAction` | `Count` | 所有规则的统一开关。`Count`：只计数不拦截，先在 CloudWatch 指标和采样请求里确认没有误报；`Block`：自定义规则直接拦截，PHP 托管规则组和 CRS 按规则自身的动作执行（基本是 Block） |
+| `IncludeBodySizeRule` | `true` | 是否加 8KB 规则（防 109618）。Block 模式下会误伤超过 8KB 的文件上传。已经开了 CRS `SizeRestrictions_BODY` 的，设成 `false` |
 | `CreateWebACL` | `false` | 是否新建 Web ACL |
 | `IncludePHPManagedRuleGroup` | `true` | 新 Web ACL 里加 PHP 托管规则组（100 WCU） |
 | `PHPManagedRuleGroupVersion` | `Version_2.3` | 默认版本可能还是 2.2（没有 `PHP2Shell_BODY`），所以要显式指定 |
 | `IncludeCoreRuleSet` | `false` | 新 Web ACL 里加 CRS（700 WCU） |
-| `CoreRuleSetMode` | `Count` | `Count` = 整组只计数；`Enforce` = 按规则自身的动作执行 |
 | `AssociateResourceArn` | 空 | 要关联的 ALB 或 API Gateway stage ARN |
+
+**从 Count 切到 Block**：观察确认没有误报后，用同一个 stack 名再部署一次，加上 `RuleAction=Block`，其他参数保持不变：
+```bash
+aws cloudformation deploy --region cn-northwest-1 \
+  --stack-name php2shell-waf --template-file php2shell-waf.yaml \
+  --parameter-overrides CreateWebACL=true RuleAction=Block
+```
+想退回观察模式，再改回 `RuleAction=Count` 部署即可。
 
 **注意事项**
 1. **中国区（cn-north-1 / cn-northwest-1）的 WAF 不能挂 CloudFront**，只能挂区域资源。CloudFront + ALB 架构，就挂在源站 ALB 上。本模板在北京和宁夏都校验过。
 2. **ALB 只检查请求体前 8KB**。`PHP2Shell` 规则用的是 `OversizeHandling: CONTINUE`，攻击者可以把字段放到 8KB 之后来绕过。所以要配合 `BodySizeOver8KB`（或 CRS `SizeRestrictions_BODY`）一起用。
-3. 建议先全部用 Count，在 CloudWatch 指标和采样请求里确认没有误报，再改成 Block。
+3. 默认是 Count，部署后不会拦截任何请求。确认没有误报后再切到 Block，否则只有观察作用，没有防护作用。
 4. Rule Group 的容量（Capacity）建好后不能改，要改只能替换资源。
 5. 全球区的 CloudFront（`CLOUDFRONT` scope，部署在 us-east-1）不在本模板范围内。
 
@@ -233,19 +240,26 @@ In PowerShell replace the trailing `\` with a backtick or put each command on on
 | Parameter | Default | Notes |
 |---|---|---|
 | `NamePrefix` | `php2shell` | Prefix for resource and metric names |
-| `Php2ShellRuleAction` | `Block` | Action for the 109619 rule; the bulletin uses Block |
-| `BodySizeRuleAction` | `Count` | `Disabled`/`Count`/`Block`. Hits file uploads - start with Count. Use `Disabled` if CRS `SizeRestrictions_BODY` is already on |
+| `RuleAction` | `Count` | One switch for all rules. `Count`: count only, nothing blocked - check CloudWatch metrics and sampled requests first. `Block`: custom rules block; the PHP managed group and CRS use their own rule actions (mostly Block) |
+| `IncludeBodySizeRule` | `true` | Add the 8 KB rule (109618). In Block mode it hits uploads larger than 8 KB. Set `false` if CRS `SizeRestrictions_BODY` is already on |
 | `CreateWebACL` | `false` | Create a new Web ACL |
 | `IncludePHPManagedRuleGroup` | `true` | Add the PHP managed rule group (100 WCU) |
 | `PHPManagedRuleGroupVersion` | `Version_2.3` | The default may still be 2.2 (no `PHP2Shell_BODY`), so pin it |
 | `IncludeCoreRuleSet` | `false` | Add CRS (700 WCU) |
-| `CoreRuleSetMode` | `Count` | `Count` = whole group counts only; `Enforce` = rules' own actions |
 | `AssociateResourceArn` | empty | ALB or API Gateway stage ARN to associate |
+
+**Switching from Count to Block**: once no false positives are seen, redeploy the same stack with `RuleAction=Block` and the other parameters unchanged:
+```bash
+aws cloudformation deploy --region cn-northwest-1 \
+  --stack-name php2shell-waf --template-file php2shell-waf.yaml \
+  --parameter-overrides CreateWebACL=true RuleAction=Block
+```
+Redeploy with `RuleAction=Count` to go back to observe-only.
 
 **Notes**
 1. **In AWS China regions (cn-north-1 / cn-northwest-1) WAF cannot be attached to CloudFront**, only to regional resources. For CloudFront + ALB, attach it to the origin ALB. Validated in Beijing and Ningxia.
 2. **ALB inspects only the first 8 KB of the body.** `PHP2Shell` uses `OversizeHandling: CONTINUE`, so a payload placed after 8 KB can bypass it. Pair it with `BodySizeOver8KB` (or CRS `SizeRestrictions_BODY`).
-3. Start in Count, check CloudWatch metrics and sampled requests, then switch to Block.
+3. The default is Count, so nothing is blocked after deployment. Switch to Block once validated; Count alone only observes and does not protect.
 4. Rule group capacity is immutable; changing it replaces the resource.
 5. Global CloudFront (`CLOUDFRONT` scope in us-east-1) is out of scope.
 
