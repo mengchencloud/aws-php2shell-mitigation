@@ -2,17 +2,9 @@
 
 [中文](#中文) | [English](#english)
 
-> **免责声明**
-> - 本项目不是 AWS 官方项目，也不代表 AWS 的立场。内容只是对下方「参考资料」中 AWS 官方公告、AWS 安全博客和 PHP 官方发布信息的引用和整理，WAF 规则逻辑照搬自官方公告，没有任何新增的检测方法。
-> - 内容以官方原文为准。官方信息会持续更新，本仓库可能滞后，使用前请对照原文确认最新版本和建议。
-> - 打补丁升级 PHP 是唯一的完整修复。WAF 规则和配置调整只能降低已知攻击路径的风险，不能保证完全防住。
-> - 模板和命令按「原样」提供，不做任何担保。部署前请在测试环境验证，自行评估误报和对业务的影响，部署和使用的后果由使用者自行承担。
+> **说明**：本仓库整理自下方 AWS 官方公告、AWS 安全博客和 PHP 官方发布的信息，方便在 AWS 上快速落地，并非 AWS 官方项目。官方信息会持续更新，请以原文为准。WAF 规则和配置调整用于在打补丁前降低风险，最终仍建议尽快升级 PHP；上线前建议先在测试环境用 Count 模式观察一段时间。
 >
-> **Disclaimer**
-> - This is not an official AWS project and does not represent AWS. It only quotes and organizes the official AWS security bulletin, AWS Security Blog posts and PHP release information listed under References. The WAF rule logic is copied from the official bulletin; no new detection logic is introduced.
-> - The official sources are authoritative. They are updated over time and this repository may lag behind; always check the originals for the latest versions and guidance.
-> - Patching PHP is the only complete fix. WAF rules and configuration changes only reduce exposure to known attack paths and do not guarantee protection.
-> - Templates and commands are provided "as is", without warranty of any kind. Test in a non-production environment, assess false positives and business impact yourself, and use at your own risk.
+> **Note**: This repository organizes guidance from the AWS security bulletin, AWS Security Blog and PHP project listed below, to make it easier to apply on AWS. It is not an official AWS project; please refer to the original sources for the latest updates. The WAF rules and configuration changes help reduce risk until PHP is patched, and upgrading PHP remains the recommended fix. We suggest starting in Count mode in a test environment first.
 
 **参考资料 / References**
 - AWS Security Bulletin [2026-143-AWS](https://aws.amazon.com/security/security-bulletins/rss/2026-143-aws/)：受影响的 AWS 服务、AWS 推荐的 WAF 规则 / AWS service status and the recommended AWS WAF rule
@@ -118,26 +110,31 @@ aws cloudformation deploy --region cn-northwest-1 \
 ```bash
 rpm -qa | grep -i '^php'                        # 看装的是哪个分支
 sudo dnf upgrade --releasever=latest 'php8.*'
-sudo systemctl restart php-fpm httpd            # 按实际服务名
-php -v
+sudo systemctl restart php-fpm                  # 用 httpd/mod_php 的再重启 httpd
+php -v                                          # 例如 8.3.35 -> 8.3.36
 ```
 AL2023 的 php8.1 没有修复，需要迁移到 php8.2 及以上。
 
 **EC2：Amazon Linux 2**
 ```bash
-sudo yum update --advisory ALAS2PHP8.2-2026-015  # Extras 的 php8.2 -> 8.2.35
-sudo systemctl restart php-fpm httpd
+sudo yum updateinfo list --advisory ALAS2PHP8.2-2026-015   # 确认能看到修复包
+sudo yum update --advisory ALAS2PHP8.2-2026-015            # Extras 的 php8.2 -> 8.2.35
+sudo systemctl restart php-fpm                             # 用 httpd 的再重启 httpd
 ```
 AL2 核心仓库自带的 php 5.4 没有修复，需要迁移。
 
-**EC2：Ubuntu / Debian / RHEL 等**：用发行版的安全更新，例如 Ubuntu 上：
+**EC2：Ubuntu / Debian / RHEL 等**：用发行版的安全更新，例如 Ubuntu 24.04：
 ```bash
 sudo apt update
 apt list --upgradable | grep php
 sudo apt install --only-upgrade 'php8.*'
-sudo systemctl restart php8.3-fpm apache2
+sudo systemctl restart php8.3-fpm               # 用 apache2/mod_php 的再重启 apache2
+dpkg -l | grep php8.3-common                    # 应为 8.3.6-0ubuntu0.24.04.13 或更新
+zcat /usr/share/doc/php8.3-common/changelog.Debian.gz | grep -m2 CVE-2026-10961
 ```
-具体修复包版本以各发行版的安全公告为准。
+Ubuntu 是把补丁回移到原版本上，`php -v` 仍显示 8.3.6，要看包版本或 changelog 里的 CVE 编号来判断。其他发行版的修复包版本以各自的安全公告为准。
+
+> 以上命令已于 2026-10-22 在宁夏区 AL2023、AL2、Ubuntu 24.04 的 EC2 上实测：先装未修复版本，再按上面的命令升级，确认版本变化且 php-fpm 重启正常。
 
 **Elastic Beanstalk**：PHP 平台 v4.13.12 已修复这两个漏洞。开了托管平台更新的环境会在维护窗口自动升级；没开的，在控制台或用 `aws elasticbeanstalk update-environment --solution-stack-name ...` 手动更新到最新 PHP 平台版本。
 
@@ -255,26 +252,31 @@ Redeploy with `RuleAction=Count` to go back to observe-only.
 ```bash
 rpm -qa | grep -i '^php'
 sudo dnf upgrade --releasever=latest 'php8.*'
-sudo systemctl restart php-fpm httpd
-php -v
+sudo systemctl restart php-fpm                   # also restart httpd if you use httpd/mod_php
+php -v                                           # e.g. 8.3.35 -> 8.3.36
 ```
 php8.1 on AL2023 has no fix - migrate to php8.2+.
 
 **EC2 - Amazon Linux 2**
 ```bash
-sudo yum update --advisory ALAS2PHP8.2-2026-015   # Extras php8.2 -> 8.2.35
-sudo systemctl restart php-fpm httpd
+sudo yum updateinfo list --advisory ALAS2PHP8.2-2026-015   # confirm the fixed packages are visible
+sudo yum update --advisory ALAS2PHP8.2-2026-015            # Extras php8.2 -> 8.2.35
+sudo systemctl restart php-fpm                             # also restart httpd if used
 ```
 The core AL2 php 5.4 has no fix - migrate.
 
-**EC2 - Ubuntu / Debian / RHEL, etc.**: apply your distribution's security update, e.g. on Ubuntu:
+**EC2 - Ubuntu / Debian / RHEL, etc.**: apply your distribution's security update, e.g. on Ubuntu 24.04:
 ```bash
 sudo apt update
 apt list --upgradable | grep php
 sudo apt install --only-upgrade 'php8.*'
-sudo systemctl restart php8.3-fpm apache2
+sudo systemctl restart php8.3-fpm                # also restart apache2 if you use mod_php
+dpkg -l | grep php8.3-common                     # expect 8.3.6-0ubuntu0.24.04.13 or later
+zcat /usr/share/doc/php8.3-common/changelog.Debian.gz | grep -m2 CVE-2026-10961
 ```
-Check your distribution's security advisory for the exact fixed package version.
+Ubuntu backports the fix, so `php -v` still shows 8.3.6; check the package version or the CVE IDs in the changelog instead. For other distributions, check their security advisories for the fixed package version.
+
+> These commands were tested on 2026-10-22 on AL2023, AL2 and Ubuntu 24.04 EC2 instances in cn-northwest-1: an unpatched version was installed first, then upgraded with the commands above, confirming the version change and a clean php-fpm restart.
 
 **Elastic Beanstalk**: PHP platform v4.13.12 fixes both CVEs. Environments with managed platform updates upgrade in their maintenance window; otherwise update the platform version in the console or with `aws elasticbeanstalk update-environment --solution-stack-name ...`.
 
