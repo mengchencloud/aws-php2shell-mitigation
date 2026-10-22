@@ -12,7 +12,7 @@
 ### 1. 漏洞概况
 - **CVE-2026-109618**：内存耗尽时的内存损坏。**CVE-2026-109619**：上一个请求的残留状态被下一个请求复用。两个都是 CVSS v4 9.2 分，未登录就能远程执行代码，已经发现在野利用。
 - 问题出在 PHP 解析 `multipart/form-data` 的阶段，业务代码还没运行就触发了，所以应用自己的登录校验挡不住。mod_php、PHP-FPM、php-cgi、FrankenPHP、LiteSpeed 都受影响。
-- AWS 公告：[2026-143-AWS](https://aws.amazon.com/security/security-bulletins/rss/2026-143-aws/)。AWS 自身服务不受影响，客户自己跑的 PHP 需要处理。
+- AWS 公告：[2026-143-AWS](https://aws.amazon.com/security/security-bulletins/rss/2026-143-aws/)。AWS 自身服务不受影响，在 AWS 上自行部署和管理的 PHP 需要处理。
 
 | PHP 分支 | 修复版本 |
 |---|---|
@@ -62,7 +62,7 @@ sudo systemctl restart php8.3-fpm apache2
 - 用容器镜像的：换成修复版本的基础镜像，重新构建，再执行 `aws lambda update-function-code --image-uri ...`。
 - 查哪些函数用了自定义运行时：`aws lambda list-functions --query "Functions[?starts_with(Runtime||'', 'provided')].[FunctionName,Runtime]"`。容器镜像函数的 Runtime 是空的，要看 `PackageType=Image`。
 
-**Amazon WorkMail**：AWS 已经处理好，客户不需要做任何事。
+**Amazon WorkMail**：由 AWS 处理，无需任何操作。
 
 ### 3. 怎么查受影响范围
 - **Amazon Inspector**：漏洞库更新后，会自动标出 EC2、ECR、Lambda 上没修复的 PHP。在规则覆盖到你的操作系统之前，搜 CVE 返回 0 条，不代表没受影响。
@@ -135,7 +135,7 @@ PowerShell 下把行尾的 `\` 换成反引号 `` ` ``，或者把命令写成�
 ### 1. Overview
 - **CVE-2026-109618**: memory corruption under memory exhaustion. **CVE-2026-109619**: request state from a previous request reused by the next one. Both CVSS v4 9.2, unauthenticated RCE, exploited in the wild.
 - Triggered while PHP parses `multipart/form-data`, before any application code runs, so application-level auth does not help. Affects mod_php, PHP-FPM, php-cgi, FrankenPHP and LiteSpeed.
-- AWS bulletin: [2026-143-AWS](https://aws.amazon.com/security/security-bulletins/rss/2026-143-aws/). AWS services are not affected; customer-managed PHP must be remediated.
+- AWS bulletin: [2026-143-AWS](https://aws.amazon.com/security/security-bulletins/rss/2026-143-aws/). AWS services are not affected; self-managed PHP running on AWS must be remediated.
 
 | PHP branch | Fixed version |
 |---|---|
