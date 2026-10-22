@@ -10,7 +10,14 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label: { default: Rule group (always created) }
-        Parameters: [NamePrefix, RuleAction, IncludeBodySizeRule]
+        Parameters:
+          - NamePrefix
+          - RuleAction
+          - IncludeBodySizeRule
+          - IncludeMultipartRule
+          - IncludePostRateLimitRule
+          - PostRateLimit
+          - PostRateLimitWindowSec
       - Label: { default: New Web ACL (optional - only if you have no WAF yet) }
         Parameters:
           - CreateWebACL
@@ -45,6 +52,36 @@ Parameters:
       SizeRestrictions_BODY). Also closes the 8 KB inspection gap of the
       PHP2Shell rule. Will hit legitimate file uploads in Block mode. Set false
       if you already run CRS SizeRestrictions_BODY.
+
+  IncludeMultipartRule:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Add the "Content-Type contains multipart/form-data" rule from the AWS WAF
+      blog (entry point of both CVEs). Only for applications with NO file
+      uploads - in Block mode it breaks every multipart upload.
+
+  IncludePostRateLimitRule:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Add the per-IP POST rate-based rule from the AWS WAF blog. Reduces repeated
+      attempts against the same worker; pair with pm.max_requests=1 on PHP-FPM.
+
+  PostRateLimit:
+    Type: Number
+    Default: 100
+    MinValue: 10
+    MaxValue: 2000000000
+    Description: Max POST requests per IP within the evaluation window (blog default 100).
+
+  PostRateLimitWindowSec:
+    Type: Number
+    Default: 60
+    AllowedValues: [60, 120, 300, 600]
+    Description: Rate-based rule evaluation window in seconds (blog default 60).
 
   CreateWebACL:
     Type: String
@@ -86,6 +123,8 @@ Parameters:
 Conditions:
   IsBlock: !Equals [!Ref RuleAction, Block]
   BodySizeEnabled: !Equals [!Ref IncludeBodySizeRule, 'true']
+  MultipartEnabled: !Equals [!Ref IncludeMultipartRule, 'true']
+  RateLimitEnabled: !Equals [!Ref IncludePostRateLimitRule, 'true']
   CreateAcl: !Equals [!Ref CreateWebACL, 'true']
   AddPhpGroup: !And
     - !Condition CreateAcl
@@ -106,7 +145,9 @@ Resources:
     Properties:
       Name: !Sub '${NamePrefix}-rulegroup'
       Scope: REGIONAL
-      # Rules use ~26 WCU; capacity is immutable, so keep headroom.
+      # All four rules together use 49 WCU (check-capacity); capacity is immutable.
+      # Rule order follows the AWS WAF blog: upload-progress and multipart rules
+      # run before the size and rate rules.
       Capacity: 50
       Description: PHP2Shell mitigation - AWS security bulletin 2026-143-AWS
       VisibilityConfig:
@@ -168,11 +209,35 @@ Resources:
                       - Priority: 0
                         Type: NONE
                     PositionalConstraint: CONTAINS
+        # Both CVEs - multipart/form-data entry point (AWS WAF blog, optional)
+        - !If
+          - MultipartEnabled
+          - Name: MultipartFormData
+            Priority: 1
+            Action: !If
+              - IsBlock
+              - Block: {}
+              - Count: {}
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: !Sub '${NamePrefix}-MultipartFormData'
+            Statement:
+              ByteMatchStatement:
+                SearchString: multipart/form-data
+                FieldToMatch:
+                  SingleHeader:
+                    Name: content-type
+                TextTransformations:
+                  - Priority: 0
+                    Type: LOWERCASE
+                PositionalConstraint: CONTAINS
+          - !Ref AWS::NoValue
         # CVE-2026-109618 - body larger than 8 KB (same as CRS SizeRestrictions_BODY)
         - !If
           - BodySizeEnabled
           - Name: BodySizeOver8KB
-            Priority: 1
+            Priority: 2
             Action: !If
               - IsBlock
               - Block: {}
@@ -191,6 +256,34 @@ Resources:
                 TextTransformations:
                   - Priority: 0
                     Type: NONE
+          - !Ref AWS::NoValue
+        # Repeated POST attempts per IP (AWS WAF blog, optional)
+        - !If
+          - RateLimitEnabled
+          - Name: PostRateLimit
+            Priority: 3
+            Action: !If
+              - IsBlock
+              - Block: {}
+              - Count: {}
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: !Sub '${NamePrefix}-PostRateLimit'
+            Statement:
+              RateBasedStatement:
+                Limit: !Ref PostRateLimit
+                EvaluationWindowSec: !Ref PostRateLimitWindowSec
+                AggregateKeyType: IP
+                ScopeDownStatement:
+                  ByteMatchStatement:
+                    SearchString: POST
+                    FieldToMatch:
+                      Method: {}
+                    TextTransformations:
+                      - Priority: 0
+                        Type: NONE
+                    PositionalConstraint: EXACTLY
           - !Ref AWS::NoValue
 
   # ---------------------------------------------------------------------------
